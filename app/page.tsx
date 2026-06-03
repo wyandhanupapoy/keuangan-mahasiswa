@@ -2,52 +2,36 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-
-// Tipe Data
-type Transaction = {
-  id: string;
-  transaction_date: string;
-  amount: number;
-  type: 'income' | 'expense';
-  description: string;
-  category: string;
-};
-
-// Daftar Kategori beserta Icon & Tipenya
-const CATEGORIES = [
-  { name: 'Makan', icon: '🍜', type: 'expense' },
-  { name: 'Transportasi', icon: '🚌', type: 'expense' },
-  { name: 'Hiburan', icon: '🎬', type: 'expense' },
-  { name: 'Belanja', icon: '🛍️', type: 'expense' },
-  { name: 'Kuliah', icon: '📚', type: 'expense' },
-  { name: 'Kesehatan', icon: '💊', type: 'expense' },
-  { name: 'Lain-lain', icon: '⚙️', type: 'expense' },
-  { name: 'Uang Saku', icon: '💰', type: 'income' },
-  { name: 'Beasiswa', icon: '🎓', type: 'income' },
-  { name: 'Part-time', icon: '💼', type: 'income' },
-  { name: 'Pemasukan Lain', icon: '↗️', type: 'income' },
-];
-
-const QUICK_AMOUNTS = [5000, 10000, 15000, 20000, 25000, 50000, 100000];
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Ags', 'Sep', 'Okt', 'Nov', 'Des'];
+import { Transaction, MONTH_NAMES } from '../types';
+import DashboardSummary from '../components/DashboardSummary';
+import TransactionForm from '../components/TransactionForm';
+import TransactionList from '../components/TransactionList';
+import ReportView from '../components/ReportView';
+import { motion, AnimatePresence } from 'framer-motion';
+import { cn } from '../lib/utils';
+import { ChevronLeft, ChevronRight, Share2, Download, Eye, Sparkles } from 'lucide-react';
+import * as htmlToImage from 'html-to-image';
 
 export default function Home() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [activeTab, setActiveTab] = useState<'Catat' | 'Riwayat' | 'Laporan'>('Catat');
   
   // State Filter Bulan & Tahun (Default: Bulan & Tahun saat ini)
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
 
-  // State Form
-  const [amount, setAmount] = useState<number | ''>('');
-  const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('Makan');
-  const [transactionDate, setTransactionDate] = useState(new Date().toISOString().split('T')[0]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isReadOnly, setIsReadOnly] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
-    fetchTransactions();
+    // Check if in parent mode
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('mode') === 'parent') {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setIsReadOnly(true);
+      }
+    }
   }, []);
 
   const fetchTransactions = async () => {
@@ -61,22 +45,27 @@ export default function Home() {
     else setTransactions(data || []);
   };
 
-  const addTransaction = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!amount || !description) return alert('Mohon isi jumlah dan keterangan!');
-    setIsSubmitting(true);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchTransactions();
+  }, []);
 
-    const selectedCategory = CATEGORIES.find(c => c.name === category);
+  const handleAddTransaction = async (data: { amount: number; description: string; category: string; transactionDate: string }) => {
+    setIsSubmitting(true);
+    
+    // Import categories to get type
+    const { CATEGORIES } = await import('../types');
+    const selectedCategory = CATEGORIES.find(c => c.name === data.category);
     const type = selectedCategory?.type || 'expense';
 
     const { error } = await supabase
       .from('transactions')
       .insert([{ 
-        amount: Number(amount), 
-        description, 
+        amount: data.amount, 
+        description: data.description, 
         type, 
-        category,
-        transaction_date: transactionDate 
+        category: data.category,
+        transaction_date: data.transactionDate 
       }]);
 
     setIsSubmitting(false);
@@ -85,10 +74,7 @@ export default function Home() {
       console.error('Error:', error);
       alert('Gagal menyimpan transaksi');
     } else {
-      setAmount('');
-      setDescription('');
       fetchTransactions();
-      alert('Berhasil disimpan!');
     }
   };
 
@@ -104,234 +90,169 @@ export default function Home() {
     return tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
   });
 
-  // Kalkulasi Saldo (Berdasarkan transaksi yang sudah difilter per bulan)
   const totalIncome = filteredTransactions.filter(t => t.type === 'income').reduce((acc, curr) => acc + curr.amount, 0);
   const totalExpense = filteredTransactions.filter(t => t.type === 'expense').reduce((acc, curr) => acc + curr.amount, 0);
   const balance = totalIncome - totalExpense;
 
-  const getCategoryIcon = (catName: string) => CATEGORIES.find(c => c.name === catName)?.icon || '📌';
+  const handleShare = () => {
+    const url = window.location.origin + window.location.pathname + '?mode=parent';
+    navigator.clipboard.writeText(url);
+    alert('Link Mode Orang Tua disalin! Silakan kirim (Paste) ke WhatsApp orang tua Anda.');
+  };
+
+  const handleDownload = async () => {
+    setIsExporting(true);
+    const node = document.getElementById('dashboard-content');
+    if (!node) {
+      setIsExporting(false);
+      return;
+    }
+    try {
+      await new Promise(r => setTimeout(r, 500));
+      const dataUrl = await htmlToImage.toPng(node, { 
+        quality: 0.95, 
+        backgroundColor: '#000000', 
+        style: { transform: 'scale(1)', transformOrigin: 'top left' }
+      });
+      const link = document.createElement('a');
+      link.download = `Laporan_Kas_${MONTH_NAMES[currentMonth]}_${currentYear}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (error) {
+      console.error('Gagal mengunduh gambar', error);
+      alert('Maaf, gagal mengekspor laporan.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
-    // Tambahkan pb-24 agar konten tidak tertutup oleh bar navigasi bawah
-    <main className="min-h-screen bg-[#0A101D] text-slate-200 font-sans p-4 md:p-8 pb-24 relative">
-      <div className="max-w-3xl mx-auto space-y-6">
+    <main className="min-h-screen relative selection:bg-indigo-500/30 font-sans pb-32">
+      
+      {/* AURORA ANIMATED BACKGROUND */}
+      <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] rounded-full bg-indigo-600/10 blur-[120px] animate-blob mix-blend-screen" />
+        <div className="absolute top-[20%] right-[-10%] w-[50vw] h-[50vw] rounded-full bg-emerald-600/10 blur-[100px] animate-blob mix-blend-screen" style={{ animationDelay: '2s' }} />
+        <div className="absolute bottom-[-20%] left-[20%] w-[70vw] h-[70vw] rounded-full bg-purple-600/10 blur-[120px] animate-blob mix-blend-screen" style={{ animationDelay: '4s' }} />
+      </div>
+
+      <div id="dashboard-content" className="max-w-7xl mx-auto p-4 md:p-8 relative z-10">
         
-        {/* Header */}
-        <header className="flex flex-col items-center justify-center space-y-2 mb-8">
-          <h1 className="text-3xl font-bold text-white flex items-center gap-3">
-            📒 Buku Kas Mahasiswa
-          </h1>
-          <div className="flex items-center gap-2 text-sm text-slate-400 bg-slate-800/50 px-4 py-1 rounded-full border border-slate-700">
-            <span>Bulan {MONTH_NAMES[currentMonth]} {currentYear}</span>
-            <span>•</span>
-            <span>{filteredTransactions.length} transaksi</span>
+        {/* Header Baru */}
+        <header className="flex flex-col md:flex-row items-center justify-between mb-8 gap-4">
+          <motion.div 
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="flex items-center gap-3 w-full md:w-auto justify-center md:justify-start"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center shadow-lg backdrop-blur-md">
+              <Sparkles className="text-indigo-400 w-6 h-6" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-serif tracking-tight text-white flex items-center gap-2">
+                Buku Kas
+                {isReadOnly && <span className="text-xs font-sans font-medium text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20 flex items-center gap-1"><Eye size={12} /> Pantau</span>}
+              </h1>
+              <p className="text-[11px] text-white/50 font-medium uppercase tracking-widest">Fintech Pribadi</p>
+            </div>
+          </motion.div>
+          
+          <div className={cn("flex items-center gap-3", isExporting && "opacity-0")}>
+            {!isReadOnly && (
+              <button onClick={handleShare} className="text-xs font-semibold flex items-center gap-1.5 text-white/70 hover:text-white bg-white/5 hover:bg-white/10 px-4 py-2 rounded-full transition-all border border-white/10 backdrop-blur-md">
+                <Share2 size={14} /> Bagikan
+              </button>
+            )}
+            <button onClick={handleDownload} className="text-xs font-semibold flex items-center gap-1.5 text-indigo-300 hover:text-white bg-indigo-500/20 hover:bg-indigo-500/30 px-4 py-2 rounded-full transition-all border border-indigo-500/20 backdrop-blur-md">
+              <Download size={14} /> Unduh
+            </button>
           </div>
         </header>
 
-        {/* Ringkasan Saldo */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-[#151E2F] p-4 rounded-xl border border-slate-700/50">
-            <h2 className="text-xs text-slate-400 uppercase font-semibold mb-1">↑ Pemasukan</h2>
-            <p className="text-emerald-400 font-bold text-lg">Rp {totalIncome.toLocaleString('id-ID')}</p>
+        {/* BENTO GRID LAYOUT */}
+        <div className="grid grid-cols-1 md:grid-cols-12 auto-rows-[minmax(180px,auto)] gap-4 md:gap-6">
+          
+          {/* Bento Item: Balance Summary (Lebar Penuh Atas) */}
+          <div className="md:col-span-12 lg:col-span-8">
+            <DashboardSummary totalIncome={totalIncome} totalExpense={totalExpense} balance={balance} />
           </div>
-          <div className="bg-[#151E2F] p-4 rounded-xl border border-slate-700/50">
-            <h2 className="text-xs text-slate-400 uppercase font-semibold mb-1">↓ Pengeluaran</h2>
-            <p className="text-rose-400 font-bold text-lg">Rp {totalExpense.toLocaleString('id-ID')}</p>
+
+          {/* Bento Item: Form Tambah (Hanya jika bukan mode Pantau) */}
+          {!isReadOnly && (
+            <div className="md:col-span-12 lg:col-span-4 row-span-2">
+              <TransactionForm onAddTransaction={handleAddTransaction} isSubmitting={isSubmitting} />
+            </div>
+          )}
+
+          {/* Bento Item: Laporan Grafik */}
+          <div className={cn("md:col-span-12", !isReadOnly ? "lg:col-span-8" : "lg:col-span-8")}>
+            <div className="glass-panel rounded-3xl p-6 h-full w-full">
+              <h2 className="text-sm text-white/50 uppercase tracking-widest font-semibold mb-6">Analisis Finansial</h2>
+              <ReportView transactions={filteredTransactions} />
+            </div>
           </div>
-          <div className="bg-[#151E2F] p-4 rounded-xl border border-slate-700/50">
-            <h2 className="text-xs text-slate-400 uppercase font-semibold mb-1">= Saldo</h2>
-            <p className={`font-bold text-lg ${balance < 0 ? 'text-rose-500' : 'text-white'}`}>
-              Rp {balance.toLocaleString('id-ID')}
-            </p>
+
+          {/* Bento Item: Riwayat Transaksi */}
+          <div className={cn("md:col-span-12", isReadOnly ? "lg:col-span-4" : "lg:col-span-12")}>
+            <div className="glass-panel rounded-3xl p-6 h-[500px] overflow-hidden flex flex-col">
+              <TransactionList 
+                transactions={filteredTransactions} 
+                currentMonth={currentMonth} 
+                currentYear={currentYear} 
+                onDelete={deleteTransaction} 
+                isReadOnly={isReadOnly}
+              />
+            </div>
           </div>
+
         </div>
-
-        {/* Tabs Utama */}
-        <div className="flex bg-[#151E2F] rounded-lg p-1 border border-slate-700/50">
-          {['Catat', 'Riwayat', 'Laporan'].map(tab => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab as any)}
-              className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${
-                activeTab === tab 
-                  ? 'bg-white text-slate-900 shadow-sm' 
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              {tab === 'Catat' ? '📝' : tab === 'Riwayat' ? '🧾' : '📊'} {tab}
-            </button>
-          ))}
-        </div>
-
-        {/* --- TAB: CATAT (FORM TRANSAKSI) --- */}
-        {activeTab === 'Catat' && (
-          <div className="bg-[#151E2F] rounded-xl border border-slate-700/50 p-6 space-y-6">
-            <h2 className="text-white font-semibold text-lg flex items-center gap-2">
-              <span>+</span> Transaksi Baru
-            </h2>
-            <form onSubmit={addTransaction} className="space-y-5">
-              {/* Form Input sama seperti sebelumnya... */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase">Tanggal</label>
-                <input
-                  type="date"
-                  value={transactionDate}
-                  onChange={(e) => setTransactionDate(e.target.value)}
-                  className="w-full bg-[#0A101D] border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500 transition"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase">Keterangan</label>
-                <input
-                  type="text"
-                  placeholder="contoh: Makan siang di warteg, Nonton Avengers..."
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full bg-[#0A101D] border border-slate-700 rounded-lg p-3 text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase">Kategori</label>
-                <div className="flex flex-wrap gap-2">
-                  {CATEGORIES.map(cat => (
-                    <button
-                      type="button"
-                      key={cat.name}
-                      onClick={() => setCategory(cat.name)}
-                      className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all border ${
-                        category === cat.name
-                          ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300'
-                          : 'bg-[#0A101D] border-slate-700 text-slate-400 hover:border-slate-500'
-                      }`}
-                    >
-                      {cat.icon} {cat.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase">Jumlah (Rp)</label>
-                <div className="relative mb-3">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-medium">Rp</span>
-                  <input
-                    type="number"
-                    placeholder="0"
-                    value={amount}
-                    onChange={(e) => setAmount(Number(e.target.value))}
-                    className="w-full bg-[#0A101D] border border-slate-700 rounded-lg p-3 pl-12 text-white font-bold focus:outline-none focus:border-indigo-500 transition"
-                    required
-                  />
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {QUICK_AMOUNTS.map(amt => (
-                    <button
-                      type="button"
-                      key={amt}
-                      onClick={() => setAmount(amt)}
-                      className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md text-xs font-medium border border-slate-700 transition"
-                    >
-                      {amt >= 1000 ? `${amt / 1000}rb` : amt}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 rounded-lg transition-all duration-200 mt-4"
-              >
-                {isSubmitting ? 'Menyimpan...' : '✅ Simpan Transaksi'}
-              </button>
-            </form>
-          </div>
-        )}
-
-        {/* --- TAB: RIWAYAT / DAFTAR TRANSAKSI --- */}
-        {(activeTab === 'Riwayat' || activeTab === 'Catat') && (
-          <div className="space-y-3 mt-8">
-            <h3 className="text-xs text-slate-400 uppercase font-semibold mb-4 px-1">
-              Transaksi {MONTH_NAMES[currentMonth]} {currentYear}
-            </h3>
-            
-            {filteredTransactions.length === 0 ? (
-              <p className="text-center text-slate-500 py-8 bg-[#151E2F] rounded-xl border border-slate-800">
-                Belum ada transaksi di bulan ini.
-              </p>
-            ) : (
-              filteredTransactions.map(t => (
-                <div key={t.id} className="flex items-center justify-between p-4 bg-[#151E2F] rounded-xl border border-slate-800 hover:border-slate-700 transition group">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-full bg-[#0A101D] border border-slate-700 flex items-center justify-center text-lg">
-                      {getCategoryIcon(t.category)}
-                    </div>
-                    <div>
-                      <h4 className="text-white font-medium">{t.description}</h4>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        {new Date(t.transaction_date).toLocaleDateString('id-ID')} • {t.category}
-                      </p>
-                    </div>
-                  </div>
-                  
-                  <div className="text-right">
-                    <p className={`font-semibold ${t.type === 'income' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {t.type === 'income' ? '+' : '-'}Rp {t.amount.toLocaleString('id-ID')}
-                    </p>
-                    <div className="flex gap-2 justify-end mt-1 opacity-0 group-hover:opacity-100 transition">
-                      <button onClick={() => deleteTransaction(t.id)} className="text-xs text-rose-500 hover:text-rose-400">
-                        Hapus
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        )}
 
       </div>
 
-      {/* --- SPREADSHEET BOTTOM TABS --- */}
-      <div className="fixed bottom-0 left-0 right-0 bg-[#0A101D] border-t border-slate-800 flex shadow-[0_-4px_10px_rgba(0,0,0,0.5)] z-50">
-        
-        {/* Navigasi Tahun */}
-        <div className="flex items-center bg-[#151E2F] border-r border-slate-800 shrink-0">
-          <button 
-            onClick={() => setCurrentYear(y => y - 1)} 
-            className="px-3 py-3 text-slate-400 hover:text-white transition"
-          >
-            ◀
-          </button>
-          <span className="text-sm font-bold text-white px-1">{currentYear}</span>
-          <button 
-            onClick={() => setCurrentYear(y => y + 1)} 
-            className="px-3 py-3 text-slate-400 hover:text-white transition"
-          >
-            ▶
-          </button>
-        </div>
-
-        {/* Tab Bulan */}
-        <div className="flex overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-          {MONTH_NAMES.map((month, index) => (
-            <button
-              key={month}
-              onClick={() => setCurrentMonth(index)}
-              className={`min-w-[80px] py-3 text-sm font-medium border-r border-slate-800 transition-colors ${
-                currentMonth === index
-                  ? 'bg-indigo-600/10 text-indigo-400 border-t-2 border-t-indigo-500 bg-gradient-to-t from-transparent to-indigo-900/20'
-                  : 'bg-[#0A101D] text-slate-500 hover:bg-[#151E2F] hover:text-slate-300 border-t-2 border-t-transparent'
-              }`}
-            >
-              {month}
+      {/* DYNAMIC ISLAND NAVIGATION */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-auto w-[90%] md:w-auto">
+        <motion.div 
+          initial={{ y: 50, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          className="glass-panel bg-black/60 rounded-full p-1.5 flex items-center justify-between md:justify-center gap-1 md:gap-2 shadow-[0_20px_40px_rgba(0,0,0,0.5)] border-white/10"
+        >
+          {/* Tahun Nav */}
+          <div className="flex items-center px-2 shrink-0 border-r border-white/10">
+            <button onClick={() => setCurrentYear(y => y - 1)} className="p-2 text-white/50 hover:text-white transition-colors">
+              <ChevronLeft size={16} />
             </button>
-          ))}
-        </div>
+            <span className="text-xs font-serif font-bold text-white w-10 text-center">{currentYear}</span>
+            <button onClick={() => setCurrentYear(y => y + 1)} className="p-2 text-white/50 hover:text-white transition-colors">
+              <ChevronRight size={16} />
+            </button>
+          </div>
+
+          {/* Bulan Nav (Scrollable on mobile) */}
+          <div className="flex overflow-x-auto no-scrollbar scroll-smooth items-center gap-1 px-2 snap-x max-w-[200px] md:max-w-full">
+            {MONTH_NAMES.map((month, index) => {
+              const isActive = currentMonth === index;
+              return (
+                <button
+                  key={month}
+                  onClick={() => setCurrentMonth(index)}
+                  className={cn(
+                    "px-4 py-2 rounded-full text-xs font-medium transition-all shrink-0 snap-center relative",
+                    isActive ? "text-white" : "text-white/40 hover:text-white/80"
+                  )}
+                >
+                  {isActive && (
+                    <motion.div 
+                      layoutId="island-active"
+                      className="absolute inset-0 bg-white/15 rounded-full border border-white/20"
+                      transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                    />
+                  )}
+                  <span className="relative z-10">{month}</span>
+                </button>
+              );
+            })}
+          </div>
+        </motion.div>
       </div>
       
     </main>
